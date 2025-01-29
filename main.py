@@ -3,9 +3,9 @@ from src.simulation import Simulation
 
 def main():
     # Initialize simulation parameters
-    rows = 15
-    cols = 15
-    p1 = 0.1  # Vehicle generation probability
+    rows = 10
+    cols = 10
+    p1 = 0.3  # Vehicle generation probability
     
     # Create simulation
     sim = Simulation(rows, cols, p1)
@@ -15,23 +15,8 @@ def main():
     clock = pygame.time.Clock()
     
     while running:
-        # Handle events
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_SPACE:
-                    sim.toggle_pause()
-            elif event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 1:  # Left click
-                    # Convert mouse position to grid coordinates
-                    x, y = pygame.mouse.get_pos()
-                    col = x // sim.visualizer.CELL_SIZE
-                    row = y // sim.visualizer.CELL_SIZE
-                    if col < cols and row < rows:
-                        sim.select_intersection((row, col))
-            elif event.type == pygame.MOUSEWHEEL:
-                sim.visualizer.handle_mouse_wheel(event.y)
+        # Handle events through simulation
+        running = sim.handle_events()
         
         # Update simulation
         sim.step()
@@ -53,7 +38,7 @@ def main():
             sim.select_vehicle(sim.selected_intersection, queue_idx, vehicle_idx)
         
         # Control frame rate
-        clock.tick(10)
+        clock.tick(60)
     
     pygame.quit()
 

@@ -23,14 +23,98 @@ class Vehicle:
         self.last_move_time = 0  # Track when the vehicle last moved
     
     def _calculate_path(self) -> List[Tuple[int, int]]:
-        """Calculate the shortest path from start to destination."""
-        # Create a graph representing the grid
-        G = nx.grid_2d_graph(self.grid_size[0], self.grid_size[1], periodic=True)
+        """Calculate the shortest path from start to destination considering periodic boundaries."""
+        # Create a graph representing the grid with periodic boundaries
+        G = nx.Graph()
+        rows, cols = self.grid_size
         
-        # Find shortest path using NetworkX
-        path = nx.shortest_path(G, self.current_pos, self.destination)
-        return path
+        # Add nodes
+        for i in range(rows):
+            for j in range(cols):
+                G.add_node((i, j))
+        
+        # Add edges with periodic boundaries
+        for i in range(rows):
+            for j in range(cols):
+                # Regular edges
+                if i + 1 < rows:
+                    G.add_edge((i, j), (i + 1, j), weight=1)
+                if j + 1 < cols:
+                    G.add_edge((i, j), (i, j + 1), weight=1)
+                
+                # Periodic boundary edges
+                G.add_edge((i, j), ((i + 1) % rows, j), weight=1)  # Vertical wrap
+                G.add_edge((i, j), (i, (j + 1) % cols), weight=1)  # Horizontal wrap
+                
+                # Diagonal edges for smoother paths
+                next_i = (i + 1) % rows
+                next_j = (j + 1) % cols
+                G.add_edge((i, j), (next_i, next_j), weight=1.4)  # Diagonal with wrap
+                G.add_edge((i, next_j), (next_i, j), weight=1.4)  # Other diagonal with wrap
+        
+        # Find all possible paths considering periodic boundaries
+        paths = []
+        weights = []
+        
+        # Consider original path
+        path1 = nx.shortest_path(G, self.current_pos, self.destination, weight='weight')
+        weight1 = self._calculate_path_weight(path1)
+        paths.append(path1)
+        weights.append(weight1)
+        
+        # Consider paths through periodic boundaries
+        rows, cols = self.grid_size
+        wrapped_destinations = [
+            # Horizontal wrapping
+            (self.destination[0], (self.destination[1] + cols) % cols),
+            (self.destination[0], (self.destination[1] - cols) % cols),
+            # Vertical wrapping
+            ((self.destination[0] + rows) % rows, self.destination[1]),
+            ((self.destination[0] - rows) % rows, self.destination[1]),
+            # Diagonal wrapping
+            ((self.destination[0] + rows) % rows, (self.destination[1] + cols) % cols),
+            ((self.destination[0] + rows) % rows, (self.destination[1] - cols) % cols),
+            ((self.destination[0] - rows) % rows, (self.destination[1] + cols) % cols),
+            ((self.destination[0] - rows) % rows, (self.destination[1] - cols) % cols)
+        ]
+        
+        for dest in wrapped_destinations:
+            try:
+                path = nx.shortest_path(G, self.current_pos, dest, weight='weight')
+                weight = self._calculate_path_weight(path)
+                paths.append(path)
+                weights.append(weight)
+            except nx.NetworkXNoPath:
+                continue
+        
+        # Select the shortest path
+        shortest_index = np.argmin(weights)
+        return paths[shortest_index]
     
+    def _calculate_path_weight(self, path: List[Tuple[int, int]]) -> float:
+        """Calculate the total weight of a path considering periodic boundaries."""
+        total_weight = 0
+        for i in range(len(path) - 1):
+            curr = path[i]
+            next_pos = path[i + 1]
+            
+            # Calculate minimum distance considering periodic boundaries
+            dx = min(
+                abs(next_pos[1] - curr[1]),
+                abs(next_pos[1] - curr[1] + self.grid_size[1]),
+                abs(next_pos[1] - curr[1] - self.grid_size[1])
+            )
+            dy = min(
+                abs(next_pos[0] - curr[0]),
+                abs(next_pos[0] - curr[0] + self.grid_size[0]),
+                abs(next_pos[0] - curr[0] - self.grid_size[0])
+            )
+            
+            # Use Euclidean distance for weight
+            total_weight += np.sqrt(dx * dx + dy * dy)
+        
+        return total_weight
+
     def get_next_position(self) -> Tuple[int, int]:
         """Get the next position in the path."""
         if self.current_path_index + 1 < len(self.path):

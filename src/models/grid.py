@@ -1,41 +1,41 @@
+from typing import Tuple, Dict, List
 import numpy as np
-from typing import Tuple, List, Dict
 from collections import deque
 from .traffic_light import TrafficLight, Direction
 from .vehicle import Vehicle
+from ..controllers.simple import SimpleController
 
 class Grid:
+    """Represents the traffic grid."""
+    
     # Direction constants
-    NORTH = (0, -1)  # Moving up (decreasing row)
-    SOUTH = (0, 1)   # Moving down (increasing row)
-    EAST = (1, 0)    # Moving right (increasing col)
-    WEST = (-1, 0)   # Moving left (decreasing col)
-
+    NORTH = "North"
+    SOUTH = "South"
+    EAST = "East"
+    WEST = "West"
+    
     def __init__(self, rows: int, cols: int):
-        """Initialize the grid with given dimensions.
-        
-        Args:
-            rows (int): Number of rows in the grid
-            cols (int): Number of columns in the grid
-        """
+        """Initialize the grid with given dimensions."""
         self.rows = rows
         self.cols = cols
-        self.traffic_lights = {}  # Dict to store traffic lights at each intersection
-        
-        # Dictionary to store vehicle queues for each direction at each intersection
-        self.intersection_queues = {}
+        self.intersection_queues = {}  # Stores vehicles at each intersection
+        self.traffic_lights = {}  # Stores traffic lights
+        self.simulation = None  # Reference to simulation
         
         # Initialize intersections and traffic lights
         for i in range(rows):
             for j in range(cols):
-                self.traffic_lights[(i, j)] = TrafficLight()
-                # Initialize queues for each direction
                 self.intersection_queues[(i, j)] = {
-                    self.NORTH: deque(),  # Queue for vehicles coming from north
-                    self.SOUTH: deque(),  # Queue for vehicles coming from south
-                    self.EAST: deque(),   # Queue for vehicles coming from east
-                    self.WEST: deque()    # Queue for vehicles coming from west
+                    self.NORTH: [],
+                    self.SOUTH: [],
+                    self.EAST: [],
+                    self.WEST: []
                 }
+                self.traffic_lights[(i, j)] = TrafficLight()
+    
+    def set_simulation(self, simulation):
+        """Set reference to simulation object."""
+        self.simulation = simulation
     
     def get_next_position(self, current: Tuple[int, int], direction: Tuple[int, int]) -> Tuple[int, int]:
         """Get next position considering periodic boundary conditions."""
@@ -71,14 +71,28 @@ class Grid:
         if not vehicle.has_reached_destination():
             next_pos = vehicle.get_next_position()
             direction = self.get_direction_from_positions(position, next_pos)
-            self.intersection_queues[position][direction].append(vehicle)
+            if direction == (0, -1):
+                self.intersection_queues[position][self.NORTH].append(vehicle)
+            elif direction == (0, 1):
+                self.intersection_queues[position][self.SOUTH].append(vehicle)
+            elif direction == (1, 0):
+                self.intersection_queues[position][self.EAST].append(vehicle)
+            elif direction == (-1, 0):
+                self.intersection_queues[position][self.WEST].append(vehicle)
     
     def remove_vehicle(self, position: Tuple[int, int], vehicle: Vehicle):
         """Remove a vehicle from its queue at the intersection."""
         if not vehicle.has_reached_destination():
             next_pos = vehicle.get_next_position()
             direction = self.get_direction_from_positions(position, next_pos)
-            queue = self.intersection_queues[position][direction]
+            if direction == (0, -1):
+                queue = self.intersection_queues[position][self.NORTH]
+            elif direction == (0, 1):
+                queue = self.intersection_queues[position][self.SOUTH]
+            elif direction == (1, 0):
+                queue = self.intersection_queues[position][self.EAST]
+            elif direction == (-1, 0):
+                queue = self.intersection_queues[position][self.WEST]
             if vehicle in queue:
                 queue.remove(vehicle)
     
@@ -100,7 +114,7 @@ class Grid:
             vehicles.extend(list(queue))
         return vehicles
     
-    def get_direction_queue(self, position: Tuple[int, int], direction: Tuple[int, int]) -> deque:
+    def get_direction_queue(self, position: Tuple[int, int], direction: str) -> list:
         """Get the queue for a specific direction at an intersection."""
         return self.intersection_queues[position][direction]
     

@@ -5,54 +5,51 @@ from ..models.traffic_light import Direction
 from ..models.vehicle import Vehicle
 
 class Visualizer:
+    """Visualizer for the traffic simulation."""
+    
     # Colors
-    BLACK = (0, 0, 0)
     WHITE = (255, 255, 255)
-    GRAY = (200, 200, 200)
+    BLACK = (0, 0, 0)
+    GRAY = (128, 128, 128)
+    LIGHT_GRAY = (200, 200, 200)
+    DARK_GRAY = (64, 64, 64)
     GREEN = (0, 255, 0)
     RED = (255, 0, 0)
-    BLUE = (0, 0, 255)
-    DARK_BLUE = (0, 0, 128)
     
     # UI Constants
     CELL_SIZE = 60
-    STATS_WIDTH = 400
     PADDING = 20
+    STATS_WIDTH = 200
     FONT_SIZE = 24
-    SMALL_FONT_SIZE = 18
+    SMALL_FONT_SIZE = 20
+    BUTTON_HEIGHT = 40
+    BUTTON_MARGIN = 10
     
-    def __init__(self, rows: int, cols: int, p1: float, grid):
+    def __init__(self, rows: int, cols: int, p1: float, grid, simulation):
         """Initialize the visualizer."""
         pygame.init()
         self.rows = rows
         self.cols = cols
         self.p1 = p1
         self.grid = grid
+        self.simulation = simulation
         
         # Calculate dimensions
-        self.grid_width = cols * self.CELL_SIZE
-        self.grid_height = rows * self.CELL_SIZE
-        self.total_width = self.grid_width + self.STATS_WIDTH + self.PADDING * 2
-        self.total_height = max(self.grid_height, 800) + self.PADDING * 2
+        self.grid_width = cols * self.CELL_SIZE + 2 * self.PADDING
+        self.grid_height = rows * self.CELL_SIZE + 2 * self.PADDING
+        self.total_width = self.grid_width + self.STATS_WIDTH
+        self.total_height = self.grid_height
         
-        # Initialize display
+        # Create screen and fonts
         self.screen = pygame.display.set_mode((self.total_width, self.total_height))
         pygame.display.set_caption("Traffic Simulation")
-        
-        # Initialize fonts
         self.font = pygame.font.Font(None, self.FONT_SIZE)
         self.small_font = pygame.font.Font(None, self.SMALL_FONT_SIZE)
         
-        # Stats section position
-        self.stats_section_x = self.grid_width + self.PADDING * 2
-        
-        # Scroll state for intersection detail
+        # Scrolling state
         self.scroll_y = 0
         self.max_scroll = 0
         self.scroll_bar_dragging = False
-        
-        # Create colormap
-        self.colormap = self._create_colormap()
     
     def _create_colormap(self):
         """Create a colormap for the heatmap visualization."""
@@ -83,45 +80,103 @@ class Visualizer:
         """Get color for heatmap based on waiting time."""
         max_time = 50  # Maximum waiting time for color scaling
         index = min(int(waiting_time / max_time * 255), 255)
-        return self.colormap[index]
+        return self._create_colormap()[index]
     
     def _draw_grid_section(self):
         """Draw the grid section with traffic density."""
         # Draw grid background
-        self.screen.fill(self.WHITE, (0, 0, self.grid_width + self.PADDING, self.total_height))
+        grid_rect = pygame.Rect(self.PADDING, self.PADDING, 
+                              self.grid_width - 2 * self.PADDING, self.grid_height - 2 * self.PADDING)
+        pygame.draw.rect(self.screen, self.WHITE, grid_rect)
         
-        # Get vehicle density
-        density = self.grid.get_total_vehicles()
-        max_density = max(1, np.max(density))  # Avoid division by zero
+        # Draw grid lines
+        for i in range(self.rows + 1):
+            y = i * self.CELL_SIZE + self.PADDING
+            pygame.draw.line(self.screen, self.BLACK,
+                           (self.PADDING, y),
+                           (self.grid_width - self.PADDING, y))
         
-        # Draw cells
-        for i in range(self.rows):
-            for j in range(self.cols):
-                x = j * self.CELL_SIZE
-                y = i * self.CELL_SIZE
-                
-                # Draw cell border
-                pygame.draw.rect(self.screen, self.GRAY, 
-                               (x, y, self.CELL_SIZE, self.CELL_SIZE), 1)
-                
-                # Get vehicle count
-                vehicle_count = density[i, j]
-                
-                if vehicle_count > 0:
-                    # Draw density indicator with color scale
-                    color_intensity = int(255 * (vehicle_count / max_density))
-                    cell_color = (0, 0, min(color_intensity + 50, 255))  # Blue gradient
-                    pygame.draw.rect(self.screen, cell_color,
-                                   (x+1, y+1, self.CELL_SIZE-2, self.CELL_SIZE-2))
-                    
-                    # Draw vehicle count
-                    text = self.small_font.render(str(int(vehicle_count)), True, self.WHITE)
-                    text_rect = text.get_rect(center=(x + self.CELL_SIZE//2, y + self.CELL_SIZE//2))
-                    self.screen.blit(text, text_rect)
-                
-                # Draw traffic light
-                light = self.grid.get_traffic_light((i, j))
-                self._draw_traffic_light(x, y, light)
+        for i in range(self.cols + 1):
+            x = i * self.CELL_SIZE + self.PADDING
+            pygame.draw.line(self.screen, self.BLACK,
+                           (x, self.PADDING),
+                           (x, self.grid_height - self.PADDING))
+        
+        # Draw intersections with traffic lights and queues
+        for pos, queues in self.grid.intersection_queues.items():
+            self._draw_intersection(pos, queues)
+    
+    def _create_heatmap_color(self, value: float) -> Tuple[int, int, int]:
+        """Create a color gradient from green to red based on value (0-1)."""
+        # Ensure value is between 0 and 1
+        value = max(0, min(1, value))
+        
+        if value < 0.5:
+            # Green (0,255,0) to Yellow (255,255,0)
+            r = int(510 * value)
+            g = 255
+            b = 0
+        else:
+            # Yellow (255,255,0) to Red (255,0,0)
+            r = 255
+            g = int(510 * (1 - value))
+            b = 0
+        
+        # Add some alpha for better visibility
+        return (r, g, b)
+    
+    def _draw_intersection(self, pos: Tuple[int, int], queue_info: dict):
+        """Draw an intersection with heatmap and traffic lights."""
+        x = pos[1] * self.CELL_SIZE + self.PADDING
+        y = pos[0] * self.CELL_SIZE + self.PADDING
+        
+        # Calculate total vehicles and waiting time for heatmap
+        total_vehicles = 0
+        total_waiting = 0
+        for direction, vehicles in queue_info.items():
+            total_vehicles += len(vehicles)
+            total_waiting += sum(v.get_waiting_time() for v in vehicles)
+        
+        # Normalize values for heatmap
+        max_vehicles = 8  # Reduced for more color variation
+        max_waiting = 30  # Maximum expected waiting time
+        
+        # Calculate heatmap value based on both vehicle count and waiting time
+        density_value = min(total_vehicles / max_vehicles, 1.0)
+        waiting_value = min(total_waiting / (max_waiting * max_vehicles), 1.0)
+        heatmap_value = max(density_value, waiting_value)  # Use the more severe indicator
+        
+        # Draw intersection background with heatmap color
+        color = self._create_heatmap_color(heatmap_value)
+        pygame.draw.rect(self.screen, color,
+                        (x + 1, y + 1, self.CELL_SIZE - 2, self.CELL_SIZE - 2))
+        
+        # Draw traffic light indicators
+        light = self.grid.get_traffic_light(pos)
+        is_horizontal_green = light.is_green(Direction.HORIZONTAL)
+        
+        # Draw traffic light states
+        light_size = (self.CELL_SIZE * 0.2, self.CELL_SIZE * 0.1)
+        
+        # Horizontal light
+        pygame.draw.rect(self.screen,
+                        self.GREEN if is_horizontal_green else self.RED,
+                        (x + self.CELL_SIZE * 0.1, 
+                         y + self.CELL_SIZE * 0.45,
+                         light_size[0], light_size[1]))
+        
+        # Vertical light
+        pygame.draw.rect(self.screen,
+                        self.GREEN if not is_horizontal_green else self.RED,
+                        (x + self.CELL_SIZE * 0.45,
+                         y + self.CELL_SIZE * 0.1,
+                         light_size[1], light_size[0]))
+        
+        # Draw vehicle count
+        if total_vehicles > 0:
+            count_text = self.small_font.render(str(total_vehicles), True, self.BLACK)
+            text_rect = count_text.get_rect(center=(x + self.CELL_SIZE/2, y + self.CELL_SIZE/2))
+            self.screen.blit(count_text, text_rect)
     
     def _draw_traffic_light(self, x: int, y: int, light):
         """Draw traffic light indicators for both directions."""
@@ -143,93 +198,106 @@ class Visualizer:
         self.screen.blit(text_ns, (x + 5, y + 15))
         self.screen.blit(text_ew, (x + self.CELL_SIZE - 15, y + 15))
     
+    def _draw_scheduler_section(self, y_offset: int) -> int:
+        """Draw the scheduler section of the stats panel."""
+        # Draw section title
+        title = "Traffic Light Control"
+        text = self.font.render(title, True, self.WHITE)
+        self.screen.blit(text, (self.grid_width + 10, y_offset))
+        y_offset += 30
+        
+        # Draw current scheduler info
+        current = "Independent"  # Default scheduler
+        text = self.small_font.render(f"Current: {current}", True, self.WHITE)
+        self.screen.blit(text, (self.grid_width + 10, y_offset))
+        y_offset += 20
+        
+        return y_offset + 10
+    
+    def _wrap_text(self, text: str, max_width: int) -> list:
+        """Wrap text to fit within a given width."""
+        words = text.split()
+        lines = []
+        current_line = []
+        
+        for word in words:
+            current_line.append(word)
+            # Test if current line exceeds max width
+            test_line = ' '.join(current_line)
+            if self.small_font.size(test_line)[0] > max_width:
+                if len(current_line) > 1:
+                    # Remove last word and add line
+                    current_line.pop()
+                    lines.append(' '.join(current_line))
+                    current_line = [word]
+                else:
+                    # Line contains single long word
+                    lines.append(test_line)
+                    current_line = []
+        
+        # Add remaining line
+        if current_line:
+            lines.append(' '.join(current_line))
+        
+        return lines
+    
     def _draw_stats_section(self, time_step: int, avg_speed: float, active_vehicles: int):
-        """Draw the statistics section with a modern, tech-inspired design."""
+        """Draw the statistics section with a modern, minimalist design."""
         # Background
-        stats_rect = pygame.Rect(self.stats_section_x, 0, 
+        stats_rect = pygame.Rect(self.grid_width, 0, 
                                self.STATS_WIDTH, self.total_height)
-        pygame.draw.rect(self.screen, self.DARK_BLUE, stats_rect)
+        pygame.draw.rect(self.screen, self.DARK_GRAY, stats_rect)
         
         y_offset = self.PADDING
-        line_height = 40
+        line_height = self.BUTTON_HEIGHT
         
         # Title
         title = self.font.render("TRAFFIC CONTROL SYSTEM", True, self.WHITE)
-        title_rect = title.get_rect(center=(self.stats_section_x + self.STATS_WIDTH//2, y_offset))
+        title_rect = title.get_rect(center=(self.grid_width + self.STATS_WIDTH//2, y_offset))
         self.screen.blit(title, title_rect)
         y_offset += line_height * 1.5
         
-        # Sections with modern design
+        # Draw scheduler section
+        y_offset = self._draw_scheduler_section(y_offset)
+        y_offset += line_height/2
+        
+        # Draw sections
         sections = [
-            ("SIMULATION SETTINGS", [
-                f"Grid Size: {self.rows}x{self.cols}",
-                f"Vehicle Generation Rate: {self.p1:.2f}"
-            ]),
-            ("REAL-TIME METRICS", [
+            ("CURRENT STATE", [
                 f"Time Step: {time_step}",
                 f"Active Vehicles: {active_vehicles}",
-                f"Average Speed: {avg_speed:.2f} cells/step"
+                f"Average Speed: {avg_speed:.2f}",
+                f"Status: {'PAUSED' if self.simulation.paused else 'RUNNING'}"
             ]),
-            ("TRAFFIC DENSITY", [
-                "● Low (1-5 vehicles)",
-                "● Medium (6-10 vehicles)",
-                "● High (>10 vehicles)"
+            ("CONTROLS", [
+                "SPACE - Pause/Resume",
+                "ESC - Exit",
+                "Click intersection for details"
             ])
         ]
         
-        for section_title, items in sections:
-            # Section header
-            pygame.draw.rect(self.screen, self.BLACK,
-                           (self.stats_section_x + 10, y_offset - 5,
+        for title, items in sections:
+            # Section title with highlight
+            pygame.draw.rect(self.screen, self.LIGHT_GRAY,
+                           (self.grid_width + 10, y_offset, 
                             self.STATS_WIDTH - 20, line_height))
-            text = self.font.render(section_title, True, self.WHITE)
-            self.screen.blit(text, (self.stats_section_x + 20, y_offset))
-            y_offset += line_height
+            text = self.font.render(title, True, self.WHITE)
+            self.screen.blit(text, (self.grid_width + 20, y_offset))
+            y_offset += line_height * 1.2
             
             # Section items
             for item in items:
                 text = self.small_font.render(item, True, self.WHITE)
-                self.screen.blit(text, (self.stats_section_x + 30, y_offset))
-                y_offset += line_height
+                self.screen.blit(text, (self.grid_width + 20, y_offset))
+                y_offset += line_height * 0.8
             
             y_offset += line_height/2
-        
-        # Draw density scale bar
-        self._draw_density_scale(y_offset)
-    
-    def _draw_density_scale(self, y_offset: int):
-        """Draw the density scale bar."""
-        legend_width = self.STATS_WIDTH - 40
-        legend_height = 20
-        x = self.stats_section_x + 20
-        
-        # Draw gradient
-        for i in range(legend_width):
-            intensity = int(255 * (i / legend_width))
-            color = (0, 0, min(intensity + 50, 255))  # Blue gradient
-            pygame.draw.line(self.screen, color, 
-                           (x + i, y_offset),
-                           (x + i, y_offset + legend_height))
-        
-        # Draw labels
-        labels = ["0", "5", "10", "15+"]
-        positions = [0, 0.33, 0.67, 1]
-        for label, pos in zip(labels, positions):
-            text = self.small_font.render(label, True, self.WHITE)
-            text_rect = text.get_rect(center=(x + pos * legend_width, y_offset + legend_height + 15))
-            self.screen.blit(text, text_rect)
     
     def _draw_intersection_detail(self, pos: Tuple[int, int], info: dict):
         """Draw detailed information about an intersection."""
         if not info:
             return
             
-        # Draw semi-transparent overlay
-        overlay = pygame.Surface((self.total_width, self.total_height))
-        overlay.fill(self.BLACK)
-        overlay.set_alpha(128)
-        self.screen.blit(overlay, (0, 0))
-        
         # Draw info panel
         panel_width = 600
         panel_height = 400
@@ -238,7 +306,7 @@ class Visualizer:
         
         # Create a surface for the panel content
         content_surface = pygame.Surface((panel_width - 20, 1000))  # Extra height for scrolling
-        content_surface.fill(self.DARK_BLUE)
+        content_surface.fill(self.DARK_GRAY)
         
         # Draw title on main panel
         title = f"Intersection ({pos[0]}, {pos[1]}) Details"
@@ -247,21 +315,30 @@ class Visualizer:
         
         # Draw queue information with scrolling
         y = 70
-        for direction, vehicles in info.items():
+        queues = info.get('queues', {})
+        for direction, vehicles in queues.items():
             dir_name = f"{direction} Queue ({len(vehicles)} vehicles):"
             text = self.font.render(dir_name, True, self.WHITE)
             content_surface.blit(text, (20, y))
             
             y += 30
-            for i, v_info in enumerate(vehicles):
-                vehicle_text = f"Vehicle {i+1}: {v_info['waiting_time']}s wait, "
-                vehicle_text += f"going {v_info['next_direction']}, {v_info['turn_type']} turn"
+            for i, vehicle in enumerate(vehicles):
+                # Get vehicle information
+                waiting_time = vehicle.get_waiting_time()
+                next_direction = vehicle.get_next_direction()
+                turn_type = vehicle.get_turn_type() if hasattr(vehicle, 'get_turn_type') else 'unknown'
+                
+                vehicle_text = f"Vehicle {i+1}: {waiting_time}s wait, "
+                vehicle_text += f"going {next_direction}, {turn_type} turn"
                 text = self.small_font.render(vehicle_text, True, self.WHITE)
                 
                 # Create clickable area for vehicle
                 vehicle_rect = pygame.Rect(40, y, panel_width - 80, 20)
-                if vehicle_rect.collidepoint(pygame.mouse.get_pos()):
-                    pygame.draw.rect(content_surface, self.BLUE, vehicle_rect)
+                mouse_pos = pygame.mouse.get_pos()
+                adjusted_pos = (mouse_pos[0] - panel_x - 10, mouse_pos[1] - panel_y - 10)
+                
+                if vehicle_rect.collidepoint(adjusted_pos):
+                    pygame.draw.rect(content_surface, self.LIGHT_GRAY, vehicle_rect)
                     if pygame.mouse.get_pressed()[0]:  # Left click
                         return (direction, i)  # Return selected vehicle info
                 
@@ -274,11 +351,11 @@ class Visualizer:
         
         # Draw visible portion of content
         visible_region = content_surface.subsurface(
-            (0, self.scroll_y, panel_width - 20, panel_height - 40)
+            (0, self.scroll_y, panel_width - 20, min(panel_height - 40, y - self.scroll_y))
         )
         
         # Draw main panel
-        pygame.draw.rect(self.screen, self.DARK_BLUE,
+        pygame.draw.rect(self.screen, self.DARK_GRAY,
                         (panel_x, panel_y, panel_width, panel_height))
         self.screen.blit(visible_region, (panel_x + 10, panel_y + 10))
         
@@ -345,27 +422,30 @@ class Visualizer:
             pygame.draw.line(self.screen, color, (start_x, start_y), (end_x, end_y), 3)
     
     def update(self, time_step: int, avg_speed: float, active_vehicles: int,
-              selected_intersection: Optional[Tuple[int, int]] = None,
-              selected_vehicle: Optional[Vehicle] = None):
+               selected_intersection: Optional[Tuple[int, int]] = None,
+               selected_vehicle: Optional[Vehicle] = None) -> Optional[Tuple[Direction, int]]:
         """Update the visualization."""
         # Clear screen
-        self.screen.fill(self.WHITE)
+        self.screen.fill(self.BLACK)
         
-        # Draw main sections
+        # Draw grid section
         self._draw_grid_section()
+        
+        # Draw stats section
         self._draw_stats_section(time_step, avg_speed, active_vehicles)
         
-        # Draw selected vehicle path
+        # Draw intersection detail if selected and simulation is paused
+        if selected_intersection and self.simulation.paused:
+            info = {
+                'queues': self.grid.intersection_queues[selected_intersection],
+                'light': self.grid.get_traffic_light(selected_intersection)
+            }
+            return self._draw_intersection_detail(selected_intersection, info)
+        
+        # Draw vehicle path if selected
         if selected_vehicle:
             self._draw_vehicle_path(selected_vehicle)
         
-        # Draw intersection detail if selected
-        selected_vehicle_info = None
-        if selected_intersection:
-            info = self.grid.get_intersection_info(selected_intersection)
-            selected_vehicle_info = self._draw_intersection_detail(selected_intersection, info)
-        
         # Update display
         pygame.display.flip()
-        
-        return selected_vehicle_info
+        return None

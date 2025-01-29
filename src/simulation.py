@@ -5,6 +5,7 @@ from src.models.vehicle import Vehicle
 from src.controllers.simple import SimpleController
 from src.visualization.visualizer import Visualizer
 from src.models.traffic_light import Direction
+import pygame
 
 class Simulation:
     def __init__(self, rows: int, cols: int, p1: float = 0.1):
@@ -13,9 +14,10 @@ class Simulation:
         self.cols = cols
         self.p1 = p1
         self.grid = Grid(rows, cols)
+        self.grid.set_simulation(self)  # Set simulation reference in grid
         self.time_step = 0
-        self.visualizer = Visualizer(rows, cols, p1, self.grid)
-        self.controller = SimpleController(self.grid)  # Pass grid to controller
+        self.visualizer = Visualizer(rows, cols, p1, self.grid, self)  # Pass simulation reference
+        self.controller = SimpleController(self.grid)  # Create controller with default scheduler
         self.paused = False
         self.selected_intersection = None
         self.selected_vehicle = None
@@ -28,6 +30,7 @@ class Simulation:
             # Clear selections when resuming
             self.selected_intersection = None
             self.selected_vehicle = None
+        print(f"Simulation {'paused' if self.paused else 'resumed'}")  # Debug print
     
     def select_intersection(self, pos: Tuple[int, int]):
         """Select an intersection for detailed view."""
@@ -182,7 +185,7 @@ class Simulation:
         if self.paused:
             return
             
-        # 1. Update traffic lights through controller
+        # 1. Update traffic lights through simulation's controller
         self.controller.update(self.time_step)
         
         # 2. Process vehicles at each intersection
@@ -215,12 +218,78 @@ class Simulation:
         
         self.time_step += 1
 
+    def handle_events(self) -> bool:
+        """Handle pygame events. Returns False if simulation should exit."""
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    return False
+                elif event.key == pygame.K_SPACE:
+                    self.toggle_pause()
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1 and self.paused:  # Left click and paused
+                    # Convert mouse position to grid coordinates
+                    x, y = event.pos
+                    grid_x = (x - self.visualizer.PADDING) // self.visualizer.CELL_SIZE
+                    grid_y = (y - self.visualizer.PADDING) // self.visualizer.CELL_SIZE
+                    
+                    # Check if click is within grid bounds
+                    if 0 <= grid_y < self.rows and 0 <= grid_x < self.cols:
+                        self.selected_intersection = (grid_y, grid_x)
+                        self.selected_vehicle = None  # Clear vehicle selection
+                        print(f"Selected intersection: {self.selected_intersection}")  # Debug print
+            elif event.type == pygame.MOUSEWHEEL:
+                if self.paused:  # Only handle scrolling when paused
+                    self.visualizer.handle_mouse_wheel(event.y)
+        
+        return True
+    
+    def update(self) -> None:
+        """Update simulation state."""
+        if not self.paused:
+            # Update traffic lights
+            self.grid.controller.update(self.time_step)
+            
+            # Move vehicles
+            self.grid.update_vehicles()
+            
+            # Generate new vehicles
+            self.grid.generate_vehicles(self.p1)
+            
+            # Update statistics
+            self._update_stats()
+            
+            # Increment time step
+            self.time_step += 1
+        
+        # Update visualization (always, even when paused)
+        selected_vehicle_info = self.visualizer.update(
+            self.time_step,
+            self.stats['avg_speed'],
+            self.stats['active_vehicles'],
+            self.selected_intersection,
+            self.selected_vehicle
+        )
+        
+        # Handle vehicle selection if intersection is selected
+        if selected_vehicle_info and self.selected_intersection:
+            direction, index = selected_vehicle_info
+            queues = self.grid.intersection_queues[self.selected_intersection]
+            if direction in queues and index < len(queues[direction]):
+                self.selected_vehicle = queues[direction][index]
+            else:
+                self.selected_vehicle = None
+
 def main():
     # Create and run simulation
     sim = Simulation(rows=5, cols=5)
     try:
         while True:
             sim.step()
+            if not sim.handle_events():
+                break
     except KeyboardInterrupt:
         print("\nSimulation ended by user")
 

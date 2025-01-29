@@ -38,6 +38,14 @@ class TrafficLight:
         """
         return self._green_direction
     
+    def set_state(self, direction: Direction) -> None:
+        """Set the traffic light to a specific direction.
+        
+        Args:
+            direction: Direction to set the green light to
+        """
+        self._green_direction = direction
+    
     def update(self, controller) -> None:
         """Update the traffic light state based on the controller's decision.
         
