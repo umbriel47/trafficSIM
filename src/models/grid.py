@@ -45,9 +45,22 @@ class Grid:
     
     def get_direction_from_positions(self, current: Tuple[int, int], next_pos: Tuple[int, int]) -> Tuple[int, int]:
         """Get the direction vector from current position to next position."""
-        dx = (next_pos[1] - current[1] + self.cols//2) % self.cols - self.cols//2
-        dy = (next_pos[0] - current[0] + self.rows//2) % self.rows - self.rows//2
+        # Calculate shortest path considering periodic boundaries
+        dx = next_pos[1] - current[1]
+        dy = next_pos[0] - current[0]
         
+        # Adjust for periodic boundaries
+        if dx > self.cols//2:
+            dx -= self.cols
+        elif dx < -self.cols//2:
+            dx += self.cols
+            
+        if dy > self.rows//2:
+            dy -= self.rows
+        elif dy < -self.rows//2:
+            dy += self.rows
+        
+        # Determine primary direction of movement
         if abs(dx) > abs(dy):
             return (1, 0) if dx > 0 else (-1, 0)
         else:
@@ -90,3 +103,39 @@ class Grid:
     def get_direction_queue(self, position: Tuple[int, int], direction: Tuple[int, int]) -> deque:
         """Get the queue for a specific direction at an intersection."""
         return self.intersection_queues[position][direction]
+    
+    def get_intersection_info(self, pos: Tuple[int, int]) -> dict:
+        """Get detailed information about vehicles at an intersection.
+        
+        Args:
+            pos: Tuple of (row, col) coordinates
+            
+        Returns:
+            dict: Information about vehicles in each direction queue
+        """
+        if pos not in self.intersection_queues:
+            return None
+        
+        info = {}
+        for direction, queue in self.intersection_queues[pos].items():
+            vehicles_info = []
+            for vehicle in queue:
+                vehicles_info.append({
+                    'waiting_time': vehicle.get_waiting_time(),
+                    'next_direction': vehicle.get_next_direction(),
+                    'turn_type': vehicle.get_turn_type(),
+                    'vehicle': vehicle
+                })
+            info[direction] = vehicles_info
+        return info
+    
+    def get_total_vehicles(self) -> np.ndarray:
+        """Get the total number of vehicles at each intersection.
+        
+        Returns:
+            np.ndarray: Matrix of vehicle counts
+        """
+        density = np.zeros((self.rows, self.cols))
+        for pos, queues in self.intersection_queues.items():
+            density[pos[0], pos[1]] = sum(len(q) for q in queues.values())
+        return density

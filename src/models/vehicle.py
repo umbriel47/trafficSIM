@@ -18,6 +18,9 @@ class Vehicle:
         self.current_path_index = 0
         self.steps_taken = 0
         self.distance_traveled = 0
+        self.waiting_times = {pos: 0 for pos in self.path}  # Track waiting time at each intersection
+        self.path_history = []  # Track actual path taken with waiting times
+        self.last_move_time = 0  # Track when the vehicle last moved
     
     def _calculate_path(self) -> List[Tuple[int, int]]:
         """Calculate the shortest path from start to destination."""
@@ -40,10 +43,15 @@ class Vehicle:
             self.current_path_index += 1
             self.current_pos = self.path[self.current_path_index]
             self.distance_traveled += 1
+            self.last_move_time = self.steps_taken
     
     def update_time(self):
-        """Update the time counter."""
+        """Update the time counter and waiting times."""
         self.steps_taken += 1
+        self.waiting_times[self.current_pos] += 1
+        if len(self.path_history) == 0 or self.path_history[-1][0] != self.current_pos:
+            self.path_history.append((self.current_pos, 0))
+        self.path_history[-1] = (self.current_pos, self.waiting_times[self.current_pos])
     
     def get_average_speed(self) -> float:
         """Calculate average speed (distance/time)."""
@@ -81,3 +89,31 @@ class Vehicle:
                 return "right" if (dx > 0 and dy_next < 0) or (dx < 0 and dy_next > 0) else "left"
         
         return "straight"
+
+    def get_next_direction(self) -> str:
+        """Get the next direction of movement as a string."""
+        if self.current_path_index + 1 >= len(self.path):
+            return "Destination"
+        
+        current = self.current_pos
+        next_pos = self.path[self.current_path_index + 1]
+        
+        dx = (next_pos[1] - current[1] + self.grid_size[1]//2) % self.grid_size[1] - self.grid_size[1]//2
+        dy = (next_pos[0] - current[0] + self.grid_size[0]//2) % self.grid_size[0] - self.grid_size[0]//2
+        
+        if dx > 0:
+            return "East"
+        elif dx < 0:
+            return "West"
+        elif dy > 0:
+            return "South"
+        else:
+            return "North"
+    
+    def get_waiting_time(self) -> int:
+        """Get the current waiting time at the current intersection."""
+        return self.waiting_times[self.current_pos]
+    
+    def get_path_with_delays(self) -> List[Tuple[Tuple[int, int], int]]:
+        """Get the path history with waiting times for each position."""
+        return self.path_history
