@@ -201,3 +201,5 @@ class Vehicle:
     def get_path_with_delays(self) -> List[Tuple[Tuple[int, int], int]]:
         """Get the path history with waiting times for each position."""
         return self.path_history
+        """Get the path history with waiting times for each position."""
+        return self.path_history

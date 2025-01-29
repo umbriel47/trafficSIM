@@ -316,17 +316,28 @@ class Visualizer:
         # Draw queue information with scrolling
         y = 70
         queues = info.get('queues', {})
-        for direction, vehicles in queues.items():
-            dir_name = f"{direction} Queue ({len(vehicles)} vehicles):"
+        traffic_light = info.get('light', None)
+        
+        # Draw traffic light state
+        if traffic_light:
+            light_state = "Green NS" if traffic_light.get_state() == Direction.VERTICAL else "Green EW"
+            text = self.font.render(f"Traffic Light: {light_state}", True, self.WHITE)
+            content_surface.blit(text, (20, y))
+            y += 40
+        
+        for direction, vehicles_info in queues.items():
+            dir_name = f"{direction} Queue ({len(vehicles_info)} vehicles):"
             text = self.font.render(dir_name, True, self.WHITE)
             content_surface.blit(text, (20, y))
             
             y += 30
-            for i, vehicle in enumerate(vehicles):
+            for i, vehicle_info in enumerate(vehicles_info):
                 # Get vehicle information
-                waiting_time = vehicle.get_waiting_time()
-                next_direction = vehicle.get_next_direction()
-                turn_type = vehicle.get_turn_type() if hasattr(vehicle, 'get_turn_type') else 'unknown'
+                waiting_time = vehicle_info['waiting_time']
+                next_pos = vehicle_info['next_pos']
+                next_direction = self.grid.get_direction_from_positions(pos, next_pos) if next_pos else "Unknown"
+                turn_type = vehicle_info['turn_type']
+                vehicle = vehicle_info['vehicle']
                 
                 vehicle_text = f"Vehicle {i+1}: {waiting_time}s wait, "
                 vehicle_text += f"going {next_direction}, {turn_type} turn"
@@ -436,8 +447,20 @@ class Visualizer:
         
         # Draw intersection detail if selected and simulation is paused
         if selected_intersection and self.simulation.paused:
+            queues = {}
+            for direction, vehicles in self.grid.intersection_queues[selected_intersection].items():
+                vehicles_info = []
+                for vehicle in vehicles:
+                    vehicles_info.append({
+                        'waiting_time': vehicle.waiting_times.get(selected_intersection, 0),
+                        'next_pos': vehicle.get_next_position(),
+                        'turn_type': vehicle.get_turn_type(),
+                        'vehicle': vehicle
+                    })
+                queues[direction] = vehicles_info
+                
             info = {
-                'queues': self.grid.intersection_queues[selected_intersection],
+                'queues': queues,
                 'light': self.grid.get_traffic_light(selected_intersection)
             }
             return self._draw_intersection_detail(selected_intersection, info)
