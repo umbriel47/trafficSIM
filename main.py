@@ -1,46 +1,46 @@
 import pygame
+import sys
 from src.simulation import Simulation
+from src.visualization import Visualizer
 
 def main():
     # Initialize simulation parameters
-    rows = 10
-    cols = 10
-    p1 = 0.3  # Vehicle generation probability
+    grid_size = (10, 10)  # 10x10 grid
+    num_vehicles = 1
     
-    # Create simulation
-    sim = Simulation(rows, cols, p1)
+    # Create simulation instance
+    sim = Simulation(grid_size=grid_size, num_vehicles=num_vehicles)
     
-    # Main loop
+    # Create visualizer
+    viz = Visualizer(sim)
+    
+    # Main simulation loop
     running = True
     clock = pygame.time.Clock()
     
     while running:
-        # Handle events through simulation
-        running = sim.handle_events()
+        # Handle events
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    running = False
+                elif event.key == pygame.K_SPACE:
+                    # Pause/Resume simulation
+                    sim.toggle_pause()
         
-        # Update simulation
+        # Update simulation state
         sim.step()
         
-        # Update visualization and get selected vehicle info
-        selected_vehicle_info = sim.visualizer.update(
-            sim.time_step,
-            sim.get_average_speed(),
-            sim.active_vehicles,
-            sim.selected_intersection,
-            sim.selected_vehicle
-        )
-        
-        # Handle vehicle selection
-        if selected_vehicle_info and sim.selected_intersection:
-            direction, vehicle_idx = selected_vehicle_info
-            queue_idx = list(sim.grid.get_intersection_info(
-                sim.selected_intersection).keys()).index(direction)
-            sim.select_vehicle(sim.selected_intersection, queue_idx, vehicle_idx)
+        # Update visualization
+        viz.draw()
         
         # Control frame rate
         clock.tick(60)
     
     pygame.quit()
+    sys.exit()
 
 if __name__ == "__main__":
     main()

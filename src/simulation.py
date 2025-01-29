@@ -1,297 +1,140 @@
+from typing import Tuple, List, Dict
 import numpy as np
-from typing import Tuple
-from src.models.grid import Grid
-from src.models.vehicle import Vehicle
-from src.controllers.simple import SimpleController
-from src.visualization.visualizer import Visualizer
-from src.models.traffic_light import Direction
-import pygame
+from .models.grid import Grid
+from .models.vehicle import Vehicle
 
 class Simulation:
-    def __init__(self, rows: int, cols: int, p1: float = 0.1):
-        """Initialize simulation with grid dimensions and vehicle generation probability."""
-        self.rows = rows
-        self.cols = cols
-        self.p1 = p1
-        self.grid = Grid(rows, cols)
-        self.grid.set_simulation(self)  # Set simulation reference in grid
+    def __init__(self, grid_size: Tuple[int, int], num_vehicles: int):
+        """Initialize the traffic simulation.
+        
+        Args:
+            grid_size: Size of the grid (rows, cols)
+            num_vehicles: Number of vehicles to simulate
+        """
+        self.grid_size = grid_size
+        self.num_vehicles = num_vehicles
         self.time_step = 0
-        self.visualizer = Visualizer(rows, cols, p1, self.grid, self)  # Pass simulation reference
-        self.controller = SimpleController(self.grid)  # Create controller with default scheduler
         self.paused = False
-        self.selected_intersection = None
-        self.selected_vehicle = None
-        self.active_vehicles = 0  # Track number of active vehicles
-    
-    def toggle_pause(self):
-        """Toggle the simulation pause state."""
-        self.paused = not self.paused
-        if not self.paused:
-            # Clear selections when resuming
-            self.selected_intersection = None
-            self.selected_vehicle = None
-        print(f"Simulation {'paused' if self.paused else 'resumed'}")  # Debug print
-    
-    def select_intersection(self, pos: Tuple[int, int]):
-        """Select an intersection for detailed view."""
-        if self.paused and pos[0] < self.rows and pos[1] < self.cols:
-            self.selected_intersection = pos
-            self.selected_vehicle = None  # Clear vehicle selection when selecting new intersection
-    
-    def select_vehicle(self, intersection: Tuple[int, int], queue_idx: int, vehicle_idx: int):
-        """Select a vehicle from a specific queue at an intersection."""
-        if not self.paused:
-            return
-            
-        info = self.grid.get_intersection_info(intersection)
-        if not info:
-            return
-            
-        # Convert queue_idx to direction
-        directions = list(info.keys())
-        if queue_idx < len(directions):
-            direction = directions[queue_idx]
-            vehicles = info[direction]
-            if vehicle_idx < len(vehicles):
-                self.selected_vehicle = vehicles[vehicle_idx]['vehicle']
-    
-    def get_intersection_info(self, pos: Tuple[int, int]) -> dict:
-        """Get detailed information about vehicles at an intersection."""
-        if pos not in self.grid.intersection_queues:
-            return None
         
-        info = {}
-        for direction, queue in self.grid.intersection_queues[pos].items():
-            vehicles_info = []
-            for vehicle in queue:
-                vehicles_info.append({
-                    'waiting_time': vehicle.get_waiting_time(),
-                    'next_direction': vehicle.get_next_direction(),
-                    'turn_type': vehicle.get_turn_type(),
-                    'vehicle': vehicle  # Include vehicle object for selection
-                })
-            info[direction] = vehicles_info
-        return info
-    
-    def generate_vehicles(self):
-        """Generate new vehicles based on probability p1."""
-        for i in range(self.grid.rows):
-            for j in range(self.grid.cols):
-                if np.random.random() < self.p1:
-                    # Generate random destination different from start
-                    while True:
-                        dest_row = np.random.randint(0, self.grid.rows)
-                        dest_col = np.random.randint(0, self.grid.cols)
-                        if (dest_row, dest_col) != (i, j):
-                            break
-                    
-                    # Create vehicle with random direction
-                    vehicle = Vehicle(
-                        start=(i, j),
-                        destination=(dest_row, dest_col),
-                        grid_size=(self.grid.rows, self.grid.cols)
-                    )
-                    
-                    # Add vehicle to a random direction queue
-                    directions = [self.grid.NORTH, self.grid.SOUTH, self.grid.EAST, self.grid.WEST]
-                    direction = directions[np.random.randint(0, 4)]
-                    self.grid.add_vehicle((i, j), vehicle)
-    
-    def remove_vehicles(self):
-        """Remove vehicles that have reached their destination."""
-        for pos in self.grid.intersection_queues:
-            for direction in [self.grid.NORTH, self.grid.SOUTH, self.grid.EAST, self.grid.WEST]:
-                queue = self.grid.get_direction_queue(pos, direction)
-                vehicles_to_remove = [v for v in queue if v.has_reached_destination()]
-                for vehicle in vehicles_to_remove:
-                    self.grid.remove_vehicle(pos, vehicle)
-    
-    def move_vehicles(self):
-        """Move vehicles according to traffic rules."""
-        # Store moved vehicles to avoid moving them twice in the same step
-        moved_vehicles = set()
+        # Initialize grid
+        self.grid = [[Grid((i, j)) for j in range(grid_size[1])] 
+                    for i in range(grid_size[0])]
         
-        # Process each intersection
-        for pos in self.grid.intersection_queues:
-            # Get traffic light at this intersection
-            light = self.grid.get_traffic_light(pos)
-            
-            # Track if we've moved a vehicle in the current green direction
-            moved_in_green = False
-            
-            # First process right turns for all directions
-            for direction in [self.grid.NORTH, self.grid.SOUTH, self.grid.EAST, self.grid.WEST]:
-                queue = self.grid.get_direction_queue(pos, direction)
-                vehicles_to_process = list(queue)  # Create a copy to avoid modification during iteration
-                
-                for vehicle in vehicles_to_process:
-                    if vehicle in moved_vehicles or vehicle.has_reached_destination():
-                        continue
-                        
-                    if vehicle.get_turn_type() == "right":
-                        self.grid.remove_vehicle(pos, vehicle)
-                        vehicle.move()
-                        self.grid.add_vehicle(vehicle.current_pos, vehicle)
-                        moved_vehicles.add(vehicle)
-            
-            # Then process straight and left turns for green direction
-            is_horizontal_green = light.is_green(Direction.HORIZONTAL)
-            green_directions = [self.grid.EAST, self.grid.WEST] if is_horizontal_green else [self.grid.NORTH, self.grid.SOUTH]
-            
-            for direction in green_directions:
-                if moved_in_green:  # Only allow one vehicle per green direction
+        # Initialize vehicles
+        self.vehicles = self._create_vehicles()
+        
+        # Place vehicles in their initial positions
+        self._place_vehicles()
+    
+    def _create_vehicles(self) -> List[Vehicle]:
+        """Create vehicles with random start and destination positions."""
+        vehicles = []
+        rows, cols = self.grid_size
+        
+        for _ in range(self.num_vehicles):
+            # Generate random start and destination positions
+            start = (np.random.randint(rows), np.random.randint(cols))
+            while True:
+                dest = (np.random.randint(rows), np.random.randint(cols))
+                if dest != start:  # Ensure destination is different from start
                     break
-                    
-                queue = self.grid.get_direction_queue(pos, direction)
-                vehicles_to_process = list(queue)
-                
-                for vehicle in vehicles_to_process:
-                    if vehicle in moved_vehicles or vehicle.has_reached_destination():
-                        continue
-                        
-                    turn_type = vehicle.get_turn_type()
-                    if turn_type in ["straight", "left"]:
-                        self.grid.remove_vehicle(pos, vehicle)
-                        vehicle.move()
-                        self.grid.add_vehicle(vehicle.current_pos, vehicle)
-                        moved_vehicles.add(vehicle)
-                        moved_in_green = True
-                        break
+            
+            vehicle = Vehicle(start, dest, self.grid_size)
+            vehicles.append(vehicle)
+        
+        return vehicles
     
-    def update_vehicles_time(self):
-        """Update time counter for all vehicles."""
-        for pos in self.grid.intersection_queues:
-            for direction_queue in self.grid.intersection_queues[pos].values():
-                for vehicle in direction_queue:
-                    vehicle.update_time()
-
-    def get_average_speed(self) -> float:
-        """Calculate average speed across all vehicles."""
-        total_speed = 0.0
-        total_vehicles = 0
+    def _place_vehicles(self):
+        """Place vehicles in their initial positions."""
+        for vehicle in self.vehicles:
+            pos = vehicle.current_pos
+            next_pos = vehicle.get_next_position()
+            if next_pos:
+                direction = self._get_direction(pos, next_pos)
+                self.grid[pos[0]][pos[1]].add_vehicle(vehicle, direction)
+    
+    def _get_direction(self, current: Tuple[int, int], next_pos: Tuple[int, int]) -> str:
+        """Determine the direction from current position to next position."""
+        rows, cols = self.grid_size
+        row_diff = (next_pos[0] - current[0] + rows//2) % rows - rows//2
+        col_diff = (next_pos[1] - current[1] + cols//2) % cols - cols//2
         
-        for pos in self.grid.intersection_queues:
-            for direction_queue in self.grid.intersection_queues[pos].values():
-                for vehicle in direction_queue:
-                    total_speed += vehicle.get_average_speed()
-                    total_vehicles += 1
-        
-        if total_vehicles == 0:
-            return 0.0
-        return total_speed / total_vehicles
+        if row_diff > 0:
+            return 'S'
+        elif row_diff < 0:
+            return 'N'
+        elif col_diff > 0:
+            return 'E'
+        else:
+            return 'W'
     
     def step(self):
-        """Perform one simulation step."""
+        """Advance the simulation by one time step."""
         if self.paused:
             return
             
-        # 1. Update traffic lights through simulation's controller
-        self.controller.update(self.time_step)
-        
-        # 2. Process vehicles at each intersection
-        self.move_vehicles()
-        
-        # 3. Update waiting times for all vehicles
-        self.update_vehicles_time()
-        
-        # 4. Generate new vehicles
-        self.generate_vehicles()
-        
-        # 5. Remove vehicles that have reached their destination
-        self.remove_vehicles()
-        
-        # Update active vehicles count
-        self.active_vehicles = sum(
-            len(direction_queue)
-            for queues in self.grid.intersection_queues.values()
-            for direction_queue in queues.values()
-        )
-        
-        # Update visualization
-        self.visualizer.update(
-            self.time_step,
-            self.get_average_speed(),
-            self.active_vehicles,
-            self.selected_intersection,
-            self.selected_vehicle
-        )
-        
         self.time_step += 1
-
-    def handle_events(self) -> bool:
-        """Handle pygame events. Returns False if simulation should exit."""
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                return False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    return False
-                elif event.key == pygame.K_SPACE:
-                    self.toggle_pause()
-            elif event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 1 and self.paused:  # Left click and paused
-                    # Convert mouse position to grid coordinates
-                    x, y = event.pos
-                    grid_x = (x - self.visualizer.PADDING) // self.visualizer.CELL_SIZE
-                    grid_y = (y - self.visualizer.PADDING) // self.visualizer.CELL_SIZE
+        
+        # Update all traffic lights
+        for row in self.grid:
+            for intersection in row:
+                intersection.update()
+        
+        # Move vehicles
+        for vehicle in self.vehicles:
+            if not vehicle.has_reached_destination():
+                current_pos = vehicle.current_pos
+                next_pos = vehicle.get_next_position()
+                
+                if next_pos:
+                    current_intersection = self.grid[current_pos[0]][current_pos[1]]
+                    next_intersection = self.grid[next_pos[0]][next_pos[1]]
                     
-                    # Check if click is within grid bounds
-                    if 0 <= grid_y < self.rows and 0 <= grid_x < self.cols:
-                        self.selected_intersection = (grid_y, grid_x)
-                        self.selected_vehicle = None  # Clear vehicle selection
-                        print(f"Selected intersection: {self.selected_intersection}")  # Debug print
-            elif event.type == pygame.MOUSEWHEEL:
-                if self.paused:  # Only handle scrolling when paused
-                    self.visualizer.handle_mouse_wheel(event.y)
-        
-        return True
+                    # Check if vehicle can move based on traffic light
+                    direction = vehicle.get_next_direction()
+                    can_move = self._can_move(current_intersection, direction)
+                    
+                    if can_move:
+                        # Remove from current intersection
+                        current_intersection.remove_vehicle(direction)
+                        
+                        # Move vehicle
+                        vehicle.move()
+                        
+                        # Add to next intersection's queue
+                        next_direction = self._get_direction(next_pos, vehicle.get_next_position())
+                        next_intersection.add_vehicle(vehicle, next_direction)
+                    else:
+                        # Update waiting time
+                        vehicle.update_waiting_time(current_pos)
     
-    def update(self) -> None:
-        """Update simulation state."""
-        if not self.paused:
-            # Update traffic lights
-            self.grid.controller.update(self.time_step)
-            
-            # Move vehicles
-            self.grid.update_vehicles()
-            
-            # Generate new vehicles
-            self.grid.generate_vehicles(self.p1)
-            
-            # Update statistics
-            self._update_stats()
-            
-            # Increment time step
-            self.time_step += 1
-        
-        # Update visualization (always, even when paused)
-        selected_vehicle_info = self.visualizer.update(
-            self.time_step,
-            self.stats['avg_speed'],
-            self.stats['active_vehicles'],
-            self.selected_intersection,
-            self.selected_vehicle
-        )
-        
-        # Handle vehicle selection if intersection is selected
-        if selected_vehicle_info and self.selected_intersection:
-            direction, index = selected_vehicle_info
-            queues = self.grid.intersection_queues[self.selected_intersection]
-            if direction in queues and index < len(queues[direction]):
-                self.selected_vehicle = queues[direction][index]
-            else:
-                self.selected_vehicle = None
-
-def main():
-    # Create and run simulation
-    sim = Simulation(rows=5, cols=5)
-    try:
-        while True:
-            sim.step()
-            if not sim.handle_events():
-                break
-    except KeyboardInterrupt:
-        print("\nSimulation ended by user")
-
-if __name__ == "__main__":
-    main()
+    def _can_move(self, intersection: Grid, direction: str) -> bool:
+        """Check if a vehicle can move in the given direction."""
+        if direction in ['N', 'S']:
+            return intersection.traffic_light.is_ns_green()
+        elif direction in ['E', 'W']:
+            return intersection.traffic_light.is_ew_green()
+        return False
+    
+    def get_state(self) -> Dict:
+        """Get the current state of the simulation."""
+        return {
+            'time_step': self.time_step,
+            'grid_size': self.grid_size,
+            'num_vehicles': self.num_vehicles,
+            'grid_state': [[intersection.get_state() for intersection in row]
+                          for row in self.grid],
+            'vehicle_states': [
+                {
+                    'position': vehicle.current_pos,
+                    'destination': vehicle.destination,
+                    'progress': vehicle.current_path_index / max(1, len(vehicle.path)),
+                    'average_speed': vehicle.get_average_speed()
+                }
+                for vehicle in self.vehicles
+            ]
+        }
+    
+    def toggle_pause(self):
+        """Toggle the pause state of the simulation."""
+        self.paused = not self.paused

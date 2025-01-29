@@ -19,102 +19,120 @@ class Vehicle:
         self.steps_taken = 0
         self.distance_traveled = 0
         self.waiting_times = {pos: 0 for pos in self.path}  # Track waiting time at each intersection
-        self.path_history = []  # Track actual path taken with waiting times
-        self.last_move_time = 0  # Track when the vehicle last moved
-    
+        
     def _calculate_path(self) -> List[Tuple[int, int]]:
         """Calculate the shortest path from start to destination considering periodic boundaries."""
-        # Create a graph representing the grid with periodic boundaries
-        G = nx.Graph()
         rows, cols = self.grid_size
+        G = nx.DiGraph()
         
-        # Add nodes
-        for i in range(rows):
-            for j in range(cols):
-                G.add_node((i, j))
+        # Get start and destination positions
+        start_row, start_col = self.current_pos
+        dest_row, dest_col = self.destination
         
-        # Add edges with periodic boundaries
-        for i in range(rows):
-            for j in range(cols):
-                # Regular edges
-                if i + 1 < rows:
-                    G.add_edge((i, j), (i + 1, j), weight=1)
-                if j + 1 < cols:
-                    G.add_edge((i, j), (i, j + 1), weight=1)
-                
-                # Periodic boundary edges
-                G.add_edge((i, j), ((i + 1) % rows, j), weight=1)  # Vertical wrap
-                G.add_edge((i, j), (i, (j + 1) % cols), weight=1)  # Horizontal wrap
-                
-                # Diagonal edges for smoother paths
-                next_i = (i + 1) % rows
-                next_j = (j + 1) % cols
-                G.add_edge((i, j), (next_i, next_j), weight=1.4)  # Diagonal with wrap
-                G.add_edge((i, next_j), (next_i, j), weight=1.4)  # Other diagonal with wrap
-        
-        # Find all possible paths considering periodic boundaries
-        paths = []
-        weights = []
-        
-        # Consider original path
-        path1 = nx.shortest_path(G, self.current_pos, self.destination, weight='weight')
-        weight1 = self._calculate_path_weight(path1)
-        paths.append(path1)
-        weights.append(weight1)
-        
-        # Consider paths through periodic boundaries
-        rows, cols = self.grid_size
-        wrapped_destinations = [
-            # Horizontal wrapping
-            (self.destination[0], (self.destination[1] + cols) % cols),
-            (self.destination[0], (self.destination[1] - cols) % cols),
-            # Vertical wrapping
-            ((self.destination[0] + rows) % rows, self.destination[1]),
-            ((self.destination[0] - rows) % rows, self.destination[1]),
-            # Diagonal wrapping
-            ((self.destination[0] + rows) % rows, (self.destination[1] + cols) % cols),
-            ((self.destination[0] + rows) % rows, (self.destination[1] - cols) % cols),
-            ((self.destination[0] - rows) % rows, (self.destination[1] + cols) % cols),
-            ((self.destination[0] - rows) % rows, (self.destination[1] - cols) % cols)
+        # Calculate all possible distances considering periodic boundaries
+        row_dists = [
+            (dest_row - start_row),  # Normal
+            (dest_row - start_row + rows),  # Through top boundary
+            (dest_row - start_row - rows)   # Through bottom boundary
+        ]
+        col_dists = [
+            (dest_col - start_col),  # Normal
+            (dest_col - start_col + cols),  # Through right boundary
+            (dest_col - start_col - cols)   # Through left boundary
         ]
         
-        for dest in wrapped_destinations:
-            try:
-                path = nx.shortest_path(G, self.current_pos, dest, weight='weight')
-                weight = self._calculate_path_weight(path)
-                paths.append(path)
-                weights.append(weight)
-            except nx.NetworkXNoPath:
-                continue
+        # Find the shortest combination of row and column distances
+        min_total_dist = float('inf')
+        best_row_dist = None
+        best_col_dist = None
         
-        # Select the shortest path
-        shortest_index = np.argmin(weights)
-        return paths[shortest_index]
+        for rd in row_dists:
+            for cd in col_dists:
+                total_dist = abs(rd) + abs(cd)
+                if total_dist < min_total_dist:
+                    min_total_dist = total_dist
+                    best_row_dist = rd
+                    best_col_dist = cd
+        
+        # Add edges based on the optimal direction
+        for i in range(rows):
+            for j in range(cols):
+                # Add all possible edges for each node
+                # Vertical edges (both up and down)
+                G.add_edge((i, j), ((i + 1) % rows, j), weight=1)  # Down
+                G.add_edge((i, j), ((i - 1) % rows, j), weight=1)  # Up
+                
+                # Horizontal edges (both left and right)
+                G.add_edge((i, j), (i, (j + 1) % cols), weight=1)  # Right
+                G.add_edge((i, j), (i, (j - 1) % cols), weight=1)  # Left
+                
+                # Add higher weights for edges in non-optimal directions
+                if best_row_dist > 0:  # Need to go down
+                    G.edges[((i, j), ((i - 1) % rows, j))]['weight'] = 2
+                elif best_row_dist < 0:  # Need to go up
+                    G.edges[((i, j), ((i + 1) % rows, j))]['weight'] = 2
+                
+                if best_col_dist > 0:  # Need to go right
+                    G.edges[((i, j), (i, (j - 1) % cols))]['weight'] = 2
+                elif best_col_dist < 0:  # Need to go left
+                    G.edges[((i, j), (i, (j + 1) % cols))]['weight'] = 2
+        
+        # Calculate shortest path
+        try:
+            path = nx.shortest_path(G, self.current_pos, self.destination, weight='weight')
+            return path
+        except nx.NetworkXNoPath:
+            return [self.current_pos]
     
-    def _calculate_path_weight(self, path: List[Tuple[int, int]]) -> float:
-        """Calculate the total weight of a path considering periodic boundaries."""
-        total_weight = 0
-        for i in range(len(path) - 1):
-            curr = path[i]
-            next_pos = path[i + 1]
+    def get_next_direction(self) -> str:
+        """Get the next direction of movement as a string."""
+        if self.current_path_index + 1 >= len(self.path):
+            return None
             
-            # Calculate minimum distance considering periodic boundaries
-            dx = min(
-                abs(next_pos[1] - curr[1]),
-                abs(next_pos[1] - curr[1] + self.grid_size[1]),
-                abs(next_pos[1] - curr[1] - self.grid_size[1])
-            )
-            dy = min(
-                abs(next_pos[0] - curr[0]),
-                abs(next_pos[0] - curr[0] + self.grid_size[0]),
-                abs(next_pos[0] - curr[0] - self.grid_size[0])
-            )
-            
-            # Use Euclidean distance for weight
-            total_weight += np.sqrt(dx * dx + dy * dy)
+        current = self.path[self.current_path_index]
+        next_pos = self.path[self.current_path_index + 1]
         
-        return total_weight
-
+        # Calculate differences considering periodic boundaries
+        rows, cols = self.grid_size
+        row_diff = (next_pos[0] - current[0] + rows//2) % rows - rows//2
+        col_diff = (next_pos[1] - current[1] + cols//2) % cols - cols//2
+        
+        if row_diff > 0:
+            return 'S'  # Moving South
+        elif row_diff < 0:
+            return 'N'  # Moving North
+        elif col_diff > 0:
+            return 'E'  # Moving East
+        elif col_diff < 0:
+            return 'W'  # Moving West
+        return None
+    
+    def get_turn_type(self) -> str:
+        """Determine the type of turn at the current intersection."""
+        if len(self.path) < 3 or self.current_path_index >= len(self.path) - 2:
+            return 'straight'
+            
+        prev_pos = self.path[self.current_path_index]
+        curr_pos = self.path[self.current_path_index + 1]
+        next_pos = self.path[self.current_path_index + 2]
+        
+        # Calculate movement vectors
+        rows, cols = self.grid_size
+        v1_row = (curr_pos[0] - prev_pos[0] + rows//2) % rows - rows//2
+        v1_col = (curr_pos[1] - prev_pos[1] + cols//2) % cols - cols//2
+        v2_row = (next_pos[0] - curr_pos[0] + rows//2) % rows - rows//2
+        v2_col = (next_pos[1] - curr_pos[1] + cols//2) % cols - cols//2
+        
+        # Cross product to determine turn direction
+        cross_product = v1_row * v2_col - v1_col * v2_row
+        
+        if cross_product == 0:
+            return 'straight'
+        elif cross_product > 0:
+            return 'right'
+        else:
+            return 'left'
+    
     def get_next_position(self) -> Tuple[int, int]:
         """Get the next position in the path."""
         if self.current_path_index + 1 < len(self.path):
@@ -127,79 +145,18 @@ class Vehicle:
             self.current_path_index += 1
             self.current_pos = self.path[self.current_path_index]
             self.distance_traveled += 1
-            self.last_move_time = self.steps_taken
     
-    def update_time(self):
-        """Update the time counter and waiting times."""
-        self.steps_taken += 1
-        self.waiting_times[self.current_pos] += 1
-        if len(self.path_history) == 0 or self.path_history[-1][0] != self.current_pos:
-            self.path_history.append((self.current_pos, 0))
-        self.path_history[-1] = (self.current_pos, self.waiting_times[self.current_pos])
-    
-    def get_average_speed(self) -> float:
-        """Calculate average speed (distance/time)."""
-        if self.steps_taken == 0:
-            return 0.0
-        return self.distance_traveled / self.steps_taken
+    def update_waiting_time(self, position: Tuple[int, int]):
+        """Update the waiting time at a specific position."""
+        if position not in self.waiting_times:
+            self.waiting_times[position] = 0
+        self.waiting_times[position] += 1
     
     def has_reached_destination(self) -> bool:
         """Check if vehicle has reached its destination."""
         return self.current_pos == self.destination
     
-    def get_turn_type(self) -> str:
-        """Determine the type of turn at the current intersection."""
-        if self.current_path_index + 1 >= len(self.path):
-            return "straight"
-        
-        # Get current and next two positions
-        current = self.current_pos
-        next_pos = self.path[self.current_path_index + 1]
-        
-        # Calculate direction vectors considering periodic boundary conditions
-        dx = (next_pos[1] - current[1] + self.grid_size[1]//2) % self.grid_size[1] - self.grid_size[1]//2
-        dy = (next_pos[0] - current[0] + self.grid_size[0]//2) % self.grid_size[0] - self.grid_size[0]//2
-        
-        # If there's a next-next position, use it to determine turn type
-        if self.current_path_index + 2 < len(self.path):
-            next_next = self.path[self.current_path_index + 2]
-            dx_next = (next_next[1] - next_pos[1] + self.grid_size[1]//2) % self.grid_size[1] - self.grid_size[1]//2
-            dy_next = (next_next[0] - next_pos[0] + self.grid_size[0]//2) % self.grid_size[0] - self.grid_size[0]//2
-            
-            # Determine turn type based on direction change
-            if dx == 0 and dx_next != 0:  # Moving vertically then horizontally
-                return "right" if (dy > 0 and dx_next > 0) or (dy < 0 and dx_next < 0) else "left"
-            elif dy == 0 and dy_next != 0:  # Moving horizontally then vertically
-                return "right" if (dx > 0 and dy_next < 0) or (dx < 0 and dy_next > 0) else "left"
-        
-        return "straight"
-
-    def get_next_direction(self) -> str:
-        """Get the next direction of movement as a string."""
-        if self.current_path_index + 1 >= len(self.path):
-            return "Destination"
-        
-        current = self.current_pos
-        next_pos = self.path[self.current_path_index + 1]
-        
-        dx = (next_pos[1] - current[1] + self.grid_size[1]//2) % self.grid_size[1] - self.grid_size[1]//2
-        dy = (next_pos[0] - current[0] + self.grid_size[0]//2) % self.grid_size[0] - self.grid_size[0]//2
-        
-        if dx > 0:
-            return "East"
-        elif dx < 0:
-            return "West"
-        elif dy > 0:
-            return "South"
-        else:
-            return "North"
-    
-    def get_waiting_time(self) -> int:
-        """Get the current waiting time at the current intersection."""
-        return self.waiting_times[self.current_pos]
-    
-    def get_path_with_delays(self) -> List[Tuple[Tuple[int, int], int]]:
-        """Get the path history with waiting times for each position."""
-        return self.path_history
-        """Get the path history with waiting times for each position."""
-        return self.path_history
+    def get_average_speed(self) -> float:
+        """Calculate average speed (distance/time)."""
+        total_time = sum(self.waiting_times.values()) + self.distance_traveled
+        return self.distance_traveled / max(1, total_time)  # Avoid division by zero
