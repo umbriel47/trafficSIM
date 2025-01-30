@@ -18,6 +18,11 @@ class Action(Enum):
     LEFT = 'left'
     RIGHT = 'right'
 
+class TrafficLightStrategy(Enum):
+    """Enum for traffic light control strategies"""
+    BASIC = "basic"          # Fixed-time cycling
+    INDEPENDENT = "independent"  # Queue-based independent control
+
 class Vehicle:
     """
     A class representing vehicles in the traffic simulation.
@@ -91,17 +96,98 @@ class Vehicle:
     def __str__(self):
         return f"Vehicle {self.vehicle_id} (Action: {self.action.value})"
 
+class TrafficLight:
+    """
+    Traffic light at an intersection controlling vehicle flow.
+    Green light allows vehicles to move in North-South or East-West directions.
+    """
+    def __init__(self, strategy=TrafficLightStrategy.BASIC):
+        """Initialize traffic light with specified strategy"""
+        self.is_ns_green = True
+        self.cycle_length = 10
+        self.current_cycle = 0
+        self.strategy = strategy
+        self.min_green_time = 3  # Minimum green time before switching
+        self.pressure_threshold = 1  # Reduced threshold to be more responsive
+        self.max_green_time = 15  # Maximum green time to prevent starvation
+    
+    def calculate_pressure(self, queues):
+        """
+        Calculate pressure (demand) for each direction.
+        Returns tuple of (ns_pressure, ew_pressure)
+        """
+        # Count vehicles in each direction's queue
+        ns_pressure = len(queues[Direction.NORTH]) + len(queues[Direction.SOUTH])
+        ew_pressure = len(queues[Direction.EAST]) + len(queues[Direction.WEST])
+        
+        # Add a small bias towards the current direction to prevent rapid switching
+        if self.is_ns_green:
+            ns_pressure += 0.5
+        else:
+            ew_pressure += 0.5
+            
+        return ns_pressure, ew_pressure
+    
+    def should_switch(self, queues):
+        """
+        Determine if light should switch based on queue pressures.
+        Implements a more sophisticated switching logic.
+        """
+        # Always allow switching after max_green_time
+        if self.current_cycle >= self.max_green_time:
+            return True
+            
+        # Don't switch before min_green_time
+        if self.current_cycle < self.min_green_time:
+            return False
+            
+        ns_pressure, ew_pressure = self.calculate_pressure(queues)
+        
+        # Switch if there's significantly more pressure in the other direction
+        if self.is_ns_green:
+            return ew_pressure > ns_pressure + self.pressure_threshold
+        else:
+            return ns_pressure > ew_pressure + self.pressure_threshold
+    
+    def update(self, queues=None):
+        """Update traffic light state based on strategy"""
+        self.current_cycle += 1
+        
+        if self.strategy == TrafficLightStrategy.BASIC:
+            # Basic fixed-time strategy
+            if self.current_cycle >= self.cycle_length:
+                self.is_ns_green = not self.is_ns_green
+                self.current_cycle = 0
+                
+        elif self.strategy == TrafficLightStrategy.INDEPENDENT and queues:
+            # Queue-based independent control
+            if self.should_switch(queues):
+                self.is_ns_green = not self.is_ns_green
+                self.current_cycle = 0
+    
+    def can_move(self, direction: Direction, action: Action) -> bool:
+        """Check if vehicles can move in the given direction with the given action"""
+        # Right turns are always allowed
+        if action == Action.RIGHT:
+            return True
+            
+        # For straight and left turns, check the traffic light
+        return (direction in [Direction.NORTH, Direction.SOUTH] and self.is_ns_green) or \
+               (direction in [Direction.EAST, Direction.WEST] and not self.is_ns_green)
+
 class Town:
     """
     A class representing the town grid layout with traffic intersections.
     The town is represented as an NxM matrix where each node is an intersection
     with four directional queues for vehicles.
     """
-    def __init__(self, rows: int, cols: int):
+    def __init__(self, rows: int, cols: int, light_strategy=TrafficLightStrategy.BASIC):
+        """Initialize town grid with specified traffic light strategy"""
         self.rows = rows
         self.cols = cols
+        self.light_strategy = light_strategy
+        
         # Initialize the grid of intersections
-        # Each intersection has 4 queues (E, S, W, N) for vehicles
         self.grid = []
         for _ in range(rows):
             row = []
@@ -110,7 +196,8 @@ class Town:
                     Direction.EAST: deque(),   # Queue for vehicles from East
                     Direction.SOUTH: deque(),  # Queue for vehicles from South
                     Direction.WEST: deque(),   # Queue for vehicles from West
-                    Direction.NORTH: deque()   # Queue for vehicles from North
+                    Direction.NORTH: deque(),  # Queue for vehicles from North
+                    'traffic_light': TrafficLight(strategy=light_strategy)  # Add traffic light to each intersection
                 }
                 row.append(intersection)
             self.grid.append(row)
@@ -146,26 +233,53 @@ class Town:
         row, col = position
         return 0 <= row < self.rows and 0 <= col < self.cols
     
+    def update_traffic_lights(self):
+        """Update all traffic lights in the town"""
+        for row in self.grid:
+            for intersection in row:
+                if self.light_strategy == TrafficLightStrategy.INDEPENDENT:
+                    # Pass queue information for independent control
+                    queues = {
+                        Direction.NORTH: intersection[Direction.NORTH],
+                        Direction.SOUTH: intersection[Direction.SOUTH],
+                        Direction.EAST: intersection[Direction.EAST],
+                        Direction.WEST: intersection[Direction.WEST]
+                    }
+                    intersection['traffic_light'].update(queues)
+                else:
+                    # Basic update without queue information
+                    intersection['traffic_light'].update()
+    
     def move_vehicle(self, vehicle: Vehicle) -> bool:
-        """
-        Move a vehicle according to its action. Returns True if vehicle remains in town,
-        False if it moves out of bounds.
-        """
+        """Move a vehicle according to its action and traffic light"""
+        if not vehicle.current_position:
+            return False
+            
+        row, col = vehicle.current_position
+        intersection = self.grid[row][col]
+        
+        # Check if vehicle is at front of queue and traffic light allows movement
+        direction_queue = intersection[vehicle.incoming_direction]
+        if not direction_queue or direction_queue[0] != vehicle:
+            return True  # Vehicle stays in town but doesn't move
+            
+        # Check traffic light (right turns don't need to wait)
+        if not intersection['traffic_light'].can_move(vehicle.incoming_direction, vehicle.action):
+            return True  # Vehicle stays in town but doesn't move
+        
+        # Calculate next position
         next_position, next_incoming = vehicle.get_next_position()
+        next_row, next_col = next_position
         
         # Check if next position is valid
         if not self.is_valid_position(next_position):
             self.remove_vehicle(vehicle)
-            vehicle.current_position = None
-            vehicle.incoming_direction = None
             return False
             
-        # Move vehicle to next position
+        # Move to next intersection and randomly change action
         self.remove_vehicle(vehicle)
+        vehicle.action = random.choice(list(Action))  # Randomly choose new action
         self.add_vehicle(vehicle, next_position, next_incoming)
-        
-        # Assign random new action
-        vehicle.action = random.choice(list(Action))
         return True
         
     def get_total_vehicles(self) -> int:
@@ -174,7 +288,8 @@ class Town:
         for row in self.grid:
             for intersection in row:
                 for direction_queue in intersection.values():
-                    total += len(direction_queue)
+                    if isinstance(direction_queue, deque):
+                        total += len(direction_queue)
         return total
     
     def get_node_density(self) -> np.ndarray:
@@ -186,7 +301,7 @@ class Town:
         density = np.zeros((self.rows, self.cols))
         for i in range(self.rows):
             for j in range(self.cols):
-                node_vehicles = sum(len(queue) for queue in self.grid[i][j].values())
+                node_vehicles = sum(len(queue) for queue in self.grid[i][j].values() if isinstance(queue, deque))
                 density[i][j] = node_vehicles / total_vehicles
         return density
     
@@ -199,7 +314,7 @@ class Town:
         intersection = self.grid[row][col]
         
         for direction, queue in intersection.items():
-            if vehicle in queue:
+            if isinstance(direction, Direction) and vehicle in queue:
                 position = list(queue).index(vehicle)
                 return f"Queue: {direction.value} (Position: {position + 1}/{len(queue)})"
         return "Not found in any queue"
@@ -330,3 +445,17 @@ class Town:
 
     def __str__(self):
         return f"Town Grid ({self.rows}x{self.cols})"
+
+class TrafficSimulation:
+    def __init__(self, rows=20, cols=20, max_steps=1000, light_strategy=TrafficLightStrategy.BASIC):
+        """Initialize simulation with town grid and specified traffic light strategy"""
+        self.town = Town(rows, cols, light_strategy)
+        self.max_steps = max_steps
+        self.time_step = 0
+        self.visualizer = None
+        self.start_time = 0
+        self.light_strategy = light_strategy
+        
+        # Vehicle tracking
+        self.vehicles = []
+        self.vehicle_stats = {}
